@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QCheckBox, QRadioButton, QButtonGroup, QGroupBox, QTableWidget,
     QTableWidgetItem, QFileDialog, QMessageBox, QProgressBar, QGraphicsView,
     QGraphicsScene, QGraphicsPixmapItem, QSplitter, QPlainTextEdit, QHeaderView,
-    QDockWidget, QScrollArea,
+    QDockWidget, QScrollArea, QSpinBox,
 )
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -179,6 +179,7 @@ class ImageState:
         self.pending = None
         self.method = "E"
         self.gt_path = None
+        self.cut_row = None             # None = плашка определяется автоматически
 
 
 # ================================================================ окно
@@ -235,6 +236,15 @@ class MainWindow(QMainWindow):
         self.scale_val.setEnabled(False)
         self.scale_info = QLabel("—"); self.scale_info.setWordWrap(True)
         f.addRow(self.scale_combo); f.addRow("Значение:", self.scale_val); f.addRow(self.scale_info)
+        lay.addWidget(g)
+
+        g = QGroupBox("Служебная плашка"); f = QFormLayout(g)
+        self.cut_check = QCheckBox("Задать первую строку плашки вручную")
+        self.cut_check.setToolTip("Если автоопределение ошиблось (плашку не нашли или обрезали лишнее)")
+        self.cut_spin = QSpinBox(); self.cut_spin.setRange(8, 20000); self.cut_spin.setEnabled(False)
+        self.cut_check.toggled.connect(self.on_cut_toggle)
+        self.cut_spin.valueChanged.connect(self.on_cut_value)
+        f.addRow(self.cut_check); f.addRow("Первая строка плашки:", self.cut_spin)
         lay.addWidget(g)
 
         g = QGroupBox("Параметры"); f = QFormLayout(g)
@@ -419,7 +429,12 @@ class MainWindow(QMainWindow):
             self.load_mags(Path(f))
 
     def load_mags(self, path):
-        self.mags.update(core.read_magnifications(path))
+        new = core.read_magnifications(path)
+        if not new:
+            QMessageBox.warning(self, "magnifications.csv",
+                                "В файле не найдено ни одного увеличения. Нужны колонки image и mag_kx "
+                                "(разделитель — запятая, точка с запятой или табуляция).")
+        self.mags.update(new)
         for st in self.images.values():
             st.result = None
         self.statusBar().showMessage(f"Загружено увеличений: {len(self.mags)}")
@@ -462,6 +477,12 @@ class MainWindow(QMainWindow):
         self.scale_combo.setCurrentIndex({"auto": 0, "mag": 1, "px": 2}[st.scale_mode])
         self.scale_combo.blockSignals(False)
         self.on_scale_mode(self.scale_combo.currentIndex(), recompute=False)
+        self.cut_check.blockSignals(True); self.cut_spin.blockSignals(True)
+        self.cut_check.setChecked(st.cut_row is not None)
+        self.cut_spin.setEnabled(st.cut_row is not None)
+        if st.cut_row is not None:
+            self.cut_spin.setValue(st.cut_row)
+        self.cut_check.blockSignals(False); self.cut_spin.blockSignals(False)
         self.gt_label.setText(f"Эталон: {st.gt_path.name}" if st.gt_path else "Эталон не загружен")
         self.view._fitted = False
         if st.result is None:
@@ -514,9 +535,29 @@ class MainWindow(QMainWindow):
             self.scale_info.setText("—")
         else:
             src = {"tiff_metadata": "метаданные TIFF", "magnification": "по увеличению",
-                   "manual": "вручную", "unknown": "не задан — размеры в пикселях"}[R["scale_source"]]
+                   "manual": "вручную", "unknown": "не задан — размеры в пикселях; выберите «по увеличению» и введите Mag с плашки снимка"}[R["scale_source"]]
             px = f"{R['pixel_nm']:.3f} нм/пикс." if R["pixel_nm"] else ""
             self.scale_info.setText(f"{px} ({src})")
+
+    def on_cut_toggle(self, checked):
+        st = self.state()
+        if not st:
+            return
+        self.cut_spin.setEnabled(checked)
+        if checked:
+            R = st.result
+            if R is not None:       # стартуем с того, что нашла автоматика
+                v = R["cut_row"] if R["cut_source"] != "none" else int(0.9 * R["full_height"])
+                self.cut_spin.blockSignals(True); self.cut_spin.setValue(v); self.cut_spin.blockSignals(False)
+            st.cut_row = self.cut_spin.value()
+        else:
+            st.cut_row = None
+        self.scale_info.setText("Нажмите «Обработать снимок», чтобы пересчитать с новой областью.")
+
+    def on_cut_value(self, v):
+        st = self.state()
+        if st and self.cut_check.isChecked():
+            st.cut_row = int(v)
 
     def merge_k(self):
         return {k: s.value() for k, s in self.mk.items()}
@@ -528,11 +569,11 @@ class MainWindow(QMainWindow):
             return
         mag, px = self.scale_args(st)
         use_model = self.use_model.isChecked()
-        key = (mag, px, use_model, tuple(sorted(self.merge_k().items())))
+        key = (mag, px, use_model, tuple(sorted(self.merge_k().items())), st.cut_row)
         if st.result is not None and st.result_key == key:
             self.after_result(); return
         self.set_busy(True, f"Обработка {st.name}…")
-        task = Task(core.compute, str(st.path), mag, px, use_model, self.merge_k())
+        task = Task(core.compute, str(st.path), mag, px, use_model, self.merge_k(), cut_row=st.cut_row)
         name = st.name
 
         def done(R):
@@ -564,11 +605,15 @@ class MainWindow(QMainWindow):
             combo.blockSignals(False)
         self.stage_method.setCurrentIndex(R["methods"].index("E"))
         self.edit_method.setCurrentIndex(R["methods"].index(st.method))
+        cs = {"auto": f"отрезана автоматически со строки {R['cut_row']}",
+              "manual": f"отрезана вручную со строки {R['cut_row']}",
+              "none": "не найдена, обрезка не выполнена"}[R["cut_source"]]
+        warn = "".join(f"<br><span style='color:#b05c00'>⚠ {w}</span>" for w in R["warnings"])
         self.info.setText(
             f"<b>{st.name}</b><br>Рабочая область: {R['image'].shape[1]}×{R['image'].shape[0]} пикс.<br>"
-            f"Плашка отрезана со строки {R['cut_row']}<br>"
+            f"Плашка {cs}<br>"
             f"Размер зерна L ≈ {R['params']['L']:.1f} пикс.<br>"
-            f"Согласие методов по границам: {R['agreement']:.0%}")
+            f"Согласие методов по границам: {R['agreement']:.0%}" + warn)
         self.update_scale_info()
         self.refresh_views()
 
@@ -775,15 +820,15 @@ class MainWindow(QMainWindow):
         jobs = []
         for st in self.images.values():
             mag, px = self.scale_args(st)
-            jobs.append((st.name, st.stem, str(st.path), mag, px, list(st.ops)))
+            jobs.append((st.name, st.stem, str(st.path), mag, px, list(st.ops), st.cut_row))
         if method == "C" and not (use_model and core.MODEL_PATH.exists()):
             method = "E"
 
         def work(progress):
             rows = []
-            for i, (name, stem, path, mag, px, ops) in enumerate(jobs):
+            for i, (name, stem, path, mag, px, ops, cut) in enumerate(jobs):
                 progress(i, name)
-                R = core.compute(path, mag, px, use_model, mk)
+                R = core.compute(path, mag, px, use_model, mk, cut_row=cut)
                 fin = core.final_result(R, method, ops)
                 core.export_one(d, stem, R, fin, ops)
                 rows.append(core.summary_row(stem, R, fin))

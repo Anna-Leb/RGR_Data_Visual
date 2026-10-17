@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage as ndi
 from skimage import filters, morphology, measure, segmentation
-from sem_io import load_sem
+from sem_io import load_sem, read_magnifications
 
 
 def noise_sigma(img):
@@ -51,8 +51,7 @@ if __name__ == "__main__":
     mags = {}
     mag_file = folder / "magnifications.csv"
     if mag_file.exists():
-        for row in csv.DictReader(open(mag_file, encoding="utf-8")):
-            mags[row["image"]] = float(row["mag_kx"])
+        mags = read_magnifications(mag_file)
     files = sorted(p for p in folder.iterdir()
                    if p.suffix.lower() in (".png", ".tif", ".tiff", ".jpg", ".bmp"))
     rows = [analyze(p, mags) for p in files]

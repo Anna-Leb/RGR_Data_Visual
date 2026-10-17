@@ -20,7 +20,7 @@ from skimage import segmentation, color, measure
 sys.path.insert(0, str(Path(__file__).parent))
 import pipeline
 import editing as ed
-from sem_io import load_sem
+from sem_io import load_sem, parse_magnifications
 from evaluate import evaluate, load_gt, annotated_region
 
 try:
@@ -55,15 +55,17 @@ def _to_tmp(name, data):
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def load_image(name, data, mag_kx, pixel_nm):
-    d = load_sem(_to_tmp(name, data), mag_kx=mag_kx or None, pixel_nm=pixel_nm or None)
+def load_image(name, data, mag_kx, pixel_nm, cut_row=None):
+    d = load_sem(_to_tmp(name, data), mag_kx=mag_kx or None, pixel_nm=pixel_nm or None,
+                 cut_row=cut_row)
     return {"image": d["image"], "full": d["full"], "cut_row": d["cut_row"],
-            "pixel_nm": d["pixel_nm"], "scale_source": d["scale_source"]}
+            "pixel_nm": d["pixel_nm"], "scale_source": d["scale_source"],
+            "cut_source": d["cut_source"], "warnings": d["warnings"]}
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def process(name, data, mag_kx, pixel_nm, use_model, merge_items):
-    d = load_image(name, data, mag_kx, pixel_nm)
+def process(name, data, mag_kx, pixel_nm, use_model, merge_items, cut_row=None):
+    d = load_image(name, data, mag_kx, pixel_nm, cut_row)
     clf = get_model(str(MODEL_PATH)) if use_model and MODEL_PATH.exists() else None
     out = pipeline.run(d["image"], d["pixel_nm"], merge_k=dict(merge_items), rf_model=clf)
     res = {"params": out["params"], "pre": out["pre"], "methods": out["methods"]}
@@ -81,11 +83,10 @@ files = st.sidebar.file_uploader("Перетащите снимки (PNG, TIFF, 
 mag_file = st.sidebar.file_uploader("magnifications.csv (необязательно)", type=["csv"])
 mags = {}
 if mag_file is not None:
-    for r in csv.DictReader(io.StringIO(mag_file.getvalue().decode("utf-8-sig"))):
-        try:
-            mags[r["image"]] = float(r["mag_kx"])
-        except (KeyError, ValueError):
-            pass
+    mags = parse_magnifications(mag_file.getvalue().decode("utf-8-sig", errors="replace"))
+    if not mags:
+        st.sidebar.warning("В magnifications.csv не найдено ни одного увеличения: "
+                           "нужны колонки image и mag_kx.")
 
 use_model = st.sidebar.checkbox("Использовать обучаемый метод C",
                                 value=MODEL_PATH.exists(), disabled=not MODEL_PATH.exists(),
@@ -125,9 +126,19 @@ elif scale_mode == "нм на пиксель":
 gt_file = st.sidebar.file_uploader("Эталонная маска для этого снимка (необязательно)",
                                    type=IMG_TYPES, key=f"gt_{cur}")
 
+auto_info = load_image(cur, f.getvalue(), mag_kx, pixel_nm, None)
+use_cut = st.sidebar.checkbox("Задать первую строку плашки вручную", key=f"cutc_{cur}",
+                              help="Если автоопределение ошиблось: плашку не нашли или обрезали лишнее")
+cut_row = None
+if use_cut:
+    H_full = int(auto_info["full"].shape[0])
+    default_cut = auto_info["cut_row"] if auto_info["cut_source"] != "none" else int(0.9 * H_full)
+    cut_row = int(st.sidebar.number_input("Первая строка плашки", 8, H_full, int(default_cut),
+                                          key=f"cutv_{cur}"))
+
 with st.spinner(f"Обработка {cur}…"):
-    info = load_image(cur, f.getvalue(), mag_kx, pixel_nm)
-    R = process(cur, f.getvalue(), mag_kx, pixel_nm, use_model, merge_items)
+    info = load_image(cur, f.getvalue(), mag_kx, pixel_nm, cut_row)
+    R = process(cur, f.getvalue(), mag_kx, pixel_nm, use_model, merge_items, cut_row)
 img = info["image"]
 px = info["pixel_nm"]
 
@@ -136,8 +147,12 @@ c1.metric("Размер рабочей области", f"{img.shape[1]}×{img.s
 c2.metric("Масштаб, нм/пикс.", f"{px:.3f}" if px else "не задан")
 c3.metric("Размер зерна L, пикс.", f"{R['params']['L']:.1f}")
 c4.metric("Согласие методов по границам", f"{R['agreement']:.0%}")
-st.caption(f"Источник масштаба: {info['scale_source']}. "
-           f"Служебная плашка отрезана со строки {info['cut_row']}.")
+_cs = {"auto": "отрезана автоматически", "manual": "отрезана вручную",
+       "none": "не найдена, обрезка не выполнена"}[info["cut_source"]]
+st.caption(f"Источник масштаба: {info['scale_source']}. Служебная плашка {_cs}"
+           + (f" (строка {info['cut_row']})." if info["cut_source"] != "none" else "."))
+for _w in info["warnings"]:
+    st.warning(_w)
 
 tab_stages, tab_edit, tab_grains, tab_quality, tab_batch = st.tabs(
     ["Стадии обработки", "Ручная правка", "Характеристики зёрен",

@@ -12,7 +12,7 @@ Leave-one-out: для каждого из N размеченных снимко�
 import argparse, csv, glob
 from pathlib import Path
 import numpy as np
-from sem_io import load_sem
+from sem_io import load_sem, read_magnifications
 import pipeline, ml_boundary
 from evaluate import evaluate, load_gt, annotated_region
 
@@ -26,8 +26,7 @@ a = ap.parse_args()
 img_dir, mask_dir = Path(a.images), Path(a.masks)
 mags = {}
 if (img_dir / "magnifications.csv").exists():
-    mags = {r["image"]: float(r["mag_kx"]) for r in
-            csv.DictReader(open(img_dir / "magnifications.csv", encoding="utf-8"))}
+    mags = read_magnifications(img_dir / "magnifications.csv")
 
 # пары снимок–маска: маска называется как снимок (+ возможный суффикс _mask/_gt)
 data = []

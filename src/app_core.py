@@ -15,7 +15,7 @@ from skimage import segmentation, color, measure
 
 import pipeline
 import editing as ed
-from sem_io import load_sem
+from sem_io import load_sem, read_magnifications as _read_mags
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = ROOT / "models" / "rf_boundary.joblib"
@@ -37,22 +37,17 @@ def get_model():
 
 
 def read_magnifications(path):
-    mags = {}
-    with open(path, encoding="utf-8-sig") as fh:
-        for r in csv.DictReader(fh):
-            try:
-                mags[r["image"].strip()] = float(r["mag_kx"])
-            except (KeyError, ValueError, AttributeError):
-                pass
-    return mags
+    """magnifications.csv -> {имя: Mag, K X}; терпит BOM, ';', десятичную запятую (см. sem_io)."""
+    return _read_mags(path)
 
 
-def compute(path, mag_kx=None, pixel_nm=None, use_model=True, merge_k=None):
-    d = load_sem(path, mag_kx=mag_kx, pixel_nm=pixel_nm)
+def compute(path, mag_kx=None, pixel_nm=None, use_model=True, merge_k=None, cut_row=None):
+    d = load_sem(path, mag_kx=mag_kx, pixel_nm=pixel_nm, cut_row=cut_row)
     clf = get_model() if use_model else None
     out = pipeline.run(d["image"], d["pixel_nm"], merge_k=merge_k, rf_model=clf)
     res = {"image": d["image"], "pixel_nm": d["pixel_nm"], "scale_source": d["scale_source"],
-           "cut_row": d["cut_row"], "params": out["params"], "pre": out["pre"],
+           "cut_row": d["cut_row"], "cut_source": d["cut_source"], "warnings": d["warnings"],
+           "full_height": d["full"].shape[0], "params": out["params"], "pre": out["pre"],
            "methods": out["methods"], "agreement": out["E"]["boundary_agreement"]}
     for k in out["methods"]:
         res[k] = {key: out[k][key] for key in ("edge", "labels", "post", "voids", "edge_ids", "grains")}
