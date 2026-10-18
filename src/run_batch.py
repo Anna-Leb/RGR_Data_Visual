@@ -54,26 +54,20 @@ for f in files:
             with open(od / f"grains_{key}.csv", "w", newline="", encoding="utf-8-sig") as fh:
                 w = csv.DictWriter(fh, fieldnames=g[0].keys(), delimiter=";"); w.writeheader(); w.writerows(g)
         inner = [x for x in g if not x["touches_border"]]
-        dnm = [x["eq_diameter_nm"] for x in inner] if d["pixel_nm"] else []
-        dpx = [float(np.sqrt(4 * x["area_px"] / np.pi)) for x in inner]   # всегда, даже без масштаба
+        dnm = [x["eq_diameter_nm"] for x in inner]
         summary.append({
-            "image": f.stem, "method": key,
-            "nm_per_px": round(d["pixel_nm"], 3) if d["pixel_nm"] else "",
+            "image": f.stem, "method": key, "nm_per_px": round(d["pixel_nm"] or 0, 3),
             "L_px": round(out["params"]["L"], 1),
             "raw_objects": int(M["labels"].max()), "grains": int(M["post"].max()),
             "inner_grains": len(inner),
             "median_d_nm": round(float(np.median(dnm)), 1) if dnm else "",
             "mean_d_nm": round(float(np.mean(dnm)), 1) if dnm else "",
             "std_d_nm": round(float(np.std(dnm)), 1) if dnm else "",
-            "median_d_px": round(float(np.median(dpx)), 1) if dpx else "",
-            "mean_d_px": round(float(np.mean(dpx)), 1) if dpx else "",
-            "std_d_px": round(float(np.std(dpx)), 1) if dpx else "",
             "voids": int(pipeline.measure.label(M["voids"]).max()),
             "boundary_agreement_AB": round(out["E"]["boundary_agreement"], 3),
             "time_s": round(dt, 1),
         })
-    s = summary[-1]
-    dmed = f"{s['median_d_nm']} nm" if s["median_d_nm"] != "" else f"{s['median_d_px']} px (масштаб не задан)"
-    print(f"{f.stem}: E -> {s['inner_grains']} inner grains, median d = {dmed}, {dt:.1f} s")
+    print(f"{f.stem}: E -> {summary[-1]['inner_grains']} inner grains, "
+          f"median d = {summary[-1]['median_d_nm']} nm, {dt:.1f} s")
 with open(Path(a.out) / "summary.csv", "w", newline="", encoding="utf-8-sig") as fh:
     w = csv.DictWriter(fh, fieldnames=summary[0].keys(), delimiter=";"); w.writeheader(); w.writerows(summary)

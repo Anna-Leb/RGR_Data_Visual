@@ -535,7 +535,7 @@ class MainWindow(QMainWindow):
             self.scale_info.setText("—")
         else:
             src = {"tiff_metadata": "метаданные TIFF", "magnification": "по увеличению",
-                   "manual": "вручную", "unknown": "не задан — размеры в пикселях; выберите «по увеличению» и введите Mag с плашки снимка"}[R["scale_source"]]
+                   "manual": "вручную", "unknown": "не задан — размеры в пикселях"}[R["scale_source"]]
             px = f"{R['pixel_nm']:.3f} нм/пикс." if R["pixel_nm"] else ""
             self.scale_info.setText(f"{px} ({src})")
 

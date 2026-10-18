@@ -155,9 +155,6 @@ def load_sem(path, mag_kx=None, pixel_nm=None, cut_row=None):
         source = "magnification"
     if pixel_nm is None:
         source = "unknown"
-        warnings.append("Масштаб не определён (нет метаданных TIFF и увеличения): размеры "
-                        "будут в пикселях. Укажите увеличение с плашки (Mag, K X), "
-                        "нм/пиксель или magnifications.csv.")
     return {
         "name": path.stem,
         "image": img[:cut],
