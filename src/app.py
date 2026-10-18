@@ -169,12 +169,12 @@ with tab_stages:
     b.image(R["pre"], caption="2. Предобработка", width=w, clamp=True)
     e = M["edge"] / (M["edge"].max() + 1e-9)
     c.image((plt.cm.magma(e)[..., :3] * 255).astype(np.uint8), width=w,
-            caption="3. Карта вероятностей (RF)" if meth == "C" else "3. Edge / boundary map")
+            caption="3. Карта вероятностей (RF)" if meth == "C" else "3. Карта границ")
     a, b, c = st.columns(3)
     a.image(segmentation.mark_boundaries(img, M["labels"], color=(1, 0, 0)), width=w, clamp=True,
             caption=f"4. Первичная сегментация ({int(M['labels'].max())} объектов)")
     b.image(color.label2rgb(M["post"], bg_label=0, alpha=1), width=w, clamp=True,
-            caption=f"5. Постобработанное фото ({int(M['post'].max())} объектов)")
+            caption=f"5. Постобработка ({int(M['post'].max())} объектов)")
     cm0 = ed.class_map(M["post"], {}, M["voids"], M["edge_ids"])
     c.image(ed.render(img, M["post"], cm0), width=w, caption="6. Наложение на оригинал")
     st.caption("Красный — зерно, жёлтый — краевое зерно (исключается из статистики), "
