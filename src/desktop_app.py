@@ -12,7 +12,6 @@
     сохранение и загрузка правок (JSON);
   * многоклассовая карта: зерно / краевое зерно / пора / частица / исключено;
   * таблица характеристик зёрен, гистограммы, экспорт CSV;
-  * метрики качества по эталонной маске;
   * пакетная обработка всех загруженных снимков с сохранением в папку.
 """
 import sys
@@ -40,7 +39,6 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 import app_core as core
 import editing as ed
 import pipeline
-from evaluate import evaluate, load_gt, annotated_region
 
 
 # ============================================================ фоновые задачи
@@ -149,6 +147,7 @@ class MplCanvas(FigureCanvas):
 
 
 def fill_table(table, rows, max_rows=5000):
+    """Заполняет таблицу; числа хранятся как числа, поэтому сортировка по столбцу верная."""
     table.clear()
     if not rows:
         table.setRowCount(0); table.setColumnCount(0); return
@@ -158,9 +157,14 @@ def fill_table(table, rows, max_rows=5000):
     for i, r in enumerate(rows[:max_rows]):
         for j, c in enumerate(cols):
             v = r[c]
-            if isinstance(v, (float, np.floating)):
-                v = f"{v:.4g}"
-            table.setItem(i, j, QTableWidgetItem(str(v)))
+            it = QTableWidgetItem()
+            if isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, bool):
+                if isinstance(v, (float, np.floating)):
+                    v = float(f"{v:.4g}")
+                it.setData(Qt.DisplayRole, v)
+            else:
+                it.setText(str(v))
+            table.setItem(i, j, it)
     table.resizeColumnsToContents()
 
 
@@ -178,7 +182,6 @@ class ImageState:
         self.ops = []
         self.pending = None
         self.method = "E"
-        self.gt_path = None
         self.cut_row = None             # None = плашка определяется автоматически
 
 
@@ -208,7 +211,6 @@ class MainWindow(QMainWindow):
             ("Открыть снимки…", self.open_files, "Ctrl+O"),
             ("Открыть папку…", self.open_folder, "Ctrl+Shift+O"),
             ("Загрузить magnifications.csv…", self.open_mags, None),
-            ("Загрузить эталонную маску для снимка…", self.open_gt, None),
             (None, None, None),
             ("Сохранить результат снимка…", self.save_current, "Ctrl+S"),
             ("Выход", self.close, "Ctrl+Q"),
@@ -248,7 +250,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(g)
 
         g = QGroupBox("Параметры"); f = QFormLayout(g)
-        self.use_model = QCheckBox("Метод C (Random Forest)")
+        self.use_model = QCheckBox("Метод C (обучаемая модель)")
         self.use_model.setChecked(core.MODEL_PATH.exists())
         self.use_model.setEnabled(core.MODEL_PATH.exists())
         if not core.MODEL_PATH.exists():
@@ -341,19 +343,7 @@ class MainWindow(QMainWindow):
         v.addWidget(b)
         self.tabs.addTab(t, "3. Характеристики зёрен")
 
-        # 4. качество
-        t = QWidget(); v = QVBoxLayout(t)
-        r = QHBoxLayout()
-        b = QPushButton("Загрузить эталонную маску…"); b.clicked.connect(self.open_gt); r.addWidget(b)
-        self.gt_label = QLabel("Эталон не загружен"); r.addWidget(self.gt_label); r.addStretch(1)
-        v.addLayout(r)
-        self.q_table = QTableWidget(); v.addWidget(self.q_table, 1)
-        self.q_view = ImageView(); v.addWidget(self.q_view, 2)
-        v.addWidget(QLabel("<small>Зелёный — эталон, красный — результат (с правками). "
-                           "Оценивается только размеченная зона, краевые зёрна исключены.</small>"))
-        self.tabs.addTab(t, "4. Качество по эталону")
-
-        # 5. пакетная обработка
+        # 4. пакетная обработка
         t = QWidget(); v = QVBoxLayout(t)
         r = QHBoxLayout()
         r.addWidget(QLabel("Метод для сводки:"))
@@ -365,7 +355,7 @@ class MainWindow(QMainWindow):
         r.addWidget(b); r.addStretch(1); v.addLayout(r)
         self.batch_bar = QProgressBar(); v.addWidget(self.batch_bar)
         self.batch_table = QTableWidget(); v.addWidget(self.batch_table, 1)
-        self.tabs.addTab(t, "5. Пакетная обработка")
+        self.tabs.addTab(t, "4. Пакетная обработка")
         self.tabs.currentChanged.connect(lambda _: self.refresh_views())
 
     # ------------------------------------------------------- фоновые задачи
@@ -452,18 +442,6 @@ class MainWindow(QMainWindow):
             self.list.setCurrentItem(first)
         self.statusBar().showMessage(f"Снимков загружено: {len(self.images)}")
 
-    def open_gt(self, *_):
-        st = self.state()
-        if not st:
-            return
-        f, _ = QFileDialog.getOpenFileName(self, f"Эталонная маска для {st.name}", "",
-                                           "Изображения (*.png *.tif *.tiff *.bmp)")
-        if f:
-            st.gt_path = Path(f)
-            self.gt_label.setText(f"Эталон: {st.gt_path.name}")
-            self.tabs.setCurrentIndex(3)
-            self.refresh_views()
-
     # ------------------------------------------------------- текущий снимок
     def state(self):
         return self.images.get(self.cur)
@@ -483,7 +461,6 @@ class MainWindow(QMainWindow):
         if st.cut_row is not None:
             self.cut_spin.setValue(st.cut_row)
         self.cut_check.blockSignals(False); self.cut_spin.blockSignals(False)
-        self.gt_label.setText(f"Эталон: {st.gt_path.name}" if st.gt_path else "Эталон не загружен")
         self.view._fitted = False
         if st.result is None:
             self.run_current()
@@ -535,7 +512,7 @@ class MainWindow(QMainWindow):
             self.scale_info.setText("—")
         else:
             src = {"tiff_metadata": "метаданные TIFF", "magnification": "по увеличению",
-                   "manual": "вручную", "unknown": "не задан — размеры в пикселях"}[R["scale_source"]]
+                   "manual": "вручную", "unknown": "не задан — размеры в пикселях; выберите «по увеличению» и введите Mag с плашки снимка"}[R["scale_source"]]
             px = f"{R['pixel_nm']:.3f} нм/пикс." if R["pixel_nm"] else ""
             self.scale_info.setText(f"{px} ({src})")
 
@@ -629,8 +606,6 @@ class MainWindow(QMainWindow):
             self.draw_edit()
         elif i == 2:
             self.draw_stats()
-        elif i == 3:
-            self.draw_quality()
 
     def final(self):
         st = self.state()
@@ -689,7 +664,7 @@ class MainWindow(QMainWindow):
                 g = next((g for g in fin["grains"] if g["id"] == gid), None)
                 unit = "нм" if st.result["pixel_nm"] else "пикс."
                 d = g["eq_diameter_nm"] if st.result["pixel_nm"] else np.sqrt(4 * g["area_px"] / np.pi)
-                self.edit_hint.setText(f"Объект №{gid}: класс «{g['class']}», "
+                self.edit_hint.setText(f"Объект №{gid}: класс «{ed.CLASS_RU.get(g['class'], g['class'])}», "
                                        f"диаметр {d:.0f} {unit}, эксцентриситет {g['eccentricity']:.2f}")
             else:
                 self.edit_hint.setText("Здесь граница или фон.")
@@ -754,7 +729,7 @@ class MainWindow(QMainWindow):
         fin = self.final()
         s = core.grain_stats(fin["grains"], st.result["pixel_nm"])
         self.stats_label.setText(
-            f"Разметка: метод {fin['method']} с учётом правок ({len(st.ops)}). "
+            f"Разметка: {core.METHOD_NAMES[fin['method']]}, с учётом правок ({len(st.ops)}). "
             f"Целых зёрен: <b>{s['n']}</b> из {len(fin['grains'])} объектов. "
             f"Медианный диаметр: <b>{s['median']:.0f} {s['unit']}</b>, "
             f"среднее ± СКО: {s['mean']:.0f} ± {s['std']:.0f} {s['unit']}, "
@@ -768,7 +743,7 @@ class MainWindow(QMainWindow):
         a2.set_xlabel("Округлость 4πS/P²"); a2.set_ylabel("Число зёрен")
         fig.tight_layout(); self.hist_canvas.draw_idle()
         self.grain_table.setSortingEnabled(False)
-        fill_table(self.grain_table, fin["grains"])
+        fill_table(self.grain_table, ed.grains_ru(fin["grains"], st.result["pixel_nm"]))
         self.grain_table.setSortingEnabled(True)
 
     def save_grains_csv(self, *_):
@@ -777,26 +752,7 @@ class MainWindow(QMainWindow):
             return
         f, _ = QFileDialog.getSaveFileName(self, "Таблица зёрен", f"{st.stem}_grains.csv", "CSV (*.csv)")
         if f:
-            Path(f).write_bytes(ed.csv_bytes(self.final()["grains"]))
-
-    def draw_quality(self):
-        st = self.state()
-        if not st.gt_path:
-            fill_table(self.q_table, []); return
-        R = st.result; img = R["image"]
-        gt = load_gt(st.gt_path, img.shape)
-        valid = annotated_region(gt)
-        rows = []
-        for m in R["methods"]:
-            rows.append({"метод": core.METHOD_NAMES[m], **evaluate(gt, R[m]["post"], valid=valid)})
-        fin = self.final()
-        rows.append({"метод": f"{fin['method']} + ручные правки", **evaluate(gt, fin["lab"], valid=valid)})
-        fill_table(self.q_table, rows)
-        from skimage import segmentation
-        rgb = segmentation.mark_boundaries(img, np.maximum(gt, 0), color=(0, 1, 0))
-        rgb = segmentation.mark_boundaries(rgb, fin["lab"], color=(1, 0, 0))
-        rgb[~valid] *= 0.45
-        self.q_view.set_image(rgb, keep_view=False)
+            Path(f).write_bytes(ed.csv_bytes(ed.grains_ru(self.final()["grains"], st.result["pixel_nm"])))
 
     # ------------------------------------------------------------ сохранение
     def save_current(self, *_):
@@ -857,8 +813,7 @@ class MainWindow(QMainWindow):
             "4. «Ручная правка» — выберите действие и кликайте по зёрнам. "
             "Колесо мыши — масштаб, правая кнопка — перетаскивание.\n"
             "5. «Характеристики зёрен» — таблица и гистограммы с учётом правок.\n"
-            "6. «Качество по эталону» — загрузите ручную маску, чтобы увидеть метрики.\n"
-            "7. «Пакетная обработка» — все снимки сразу, результаты в выбранную папку.\n"
+            "6. «Пакетная обработка» — все снимки сразу, результаты в выбранную папку.\n"
             "Ctrl+S — сохранить все результаты текущего снимка."))
 
 

@@ -20,10 +20,11 @@ from sem_io import load_sem, read_magnifications as _read_mags
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = ROOT / "models" / "rf_boundary.joblib"
 IMG_EXT = (".png", ".tif", ".tiff", ".jpg", ".jpeg", ".bmp")
-METHOD_NAMES = {"A": "A — гребни (Sato) + водораздел",
-                "B": "B — яркость зерна + водораздел",
-                "C": "C — Random Forest (обучаемый)",
-                "E": "E — ансамбль (итоговый)"}
+METHOD_NAMES = {"A": "A — по границам (фильтр гребней + водораздел)",
+                "B": "B — по яркости зерна (+ водораздел)",
+                "C": "C — обучаемая модель",
+                "E": "E — общая модель (итоговая)"}
+METHOD_SHORT = {"A": "по границам", "B": "по яркости", "C": "обучаемая модель", "E": "общая модель"}
 
 _model = None
 
@@ -94,16 +95,16 @@ def stages_figure(R, method, fig=None):
     ax[0].imshow(img, cmap="gray"); ax[0].set_title("1. Оригинал")
     ax[1].imshow(R["pre"], cmap="gray"); ax[1].set_title("2. Предобработка")
     ax[2].imshow(M["edge"], cmap="magma")
-    ax[2].set_title("3. Карта вероятностей (RF)" if method == "C" else "3. Карта границ")
+    ax[2].set_title("3. Карта вероятностей границ" if method == "C" else "3. Карта границ")
     ax[3].imshow(segmentation.mark_boundaries(img, M["labels"], color=(1, 0, 0)))
     ax[3].set_title(f"4. Первичная сегментация ({int(M['labels'].max())})")
     ax[4].imshow(color.label2rgb(M["post"], bg_label=0, alpha=1))
     ax[4].set_title(f"5. Постобработка ({int(M['post'].max())})")
     cm = ed.class_map(M["post"], {}, M["voids"], M["edge_ids"])
-    ax[5].imshow(ed.render(img, M["post"], cm)); ax[5].set_title("6. Накладка на оригинал")
+    ax[5].imshow(ed.render(img, M["post"], cm)); ax[5].set_title("6. Наложение на оригинал")
     for a in ax:
         a.axis("off")
-    fig.suptitle(f"{METHOD_NAMES[method]}   L = {R['params']['L']:.1f} пикс.")
+    fig.suptitle(METHOD_NAMES[method])
     fig.tight_layout()
     return fig
 
@@ -117,7 +118,7 @@ def export_one(out_dir, stem, R, fin, ops):
         "classes.png": ed.png_bytes(fin["cm"]),
         "classes_color.png": ed.png_bytes(ed.class_map_rgb(fin["cm"])),
         "overlay.png": ed.png_bytes(ed.render(R["image"], fin["lab"], fin["cm"])),
-        "grains.csv": ed.csv_bytes(fin["grains"]),
+        "grains.csv": ed.csv_bytes(ed.grains_ru(fin["grains"], R["pixel_nm"])),
         "corrections.json": ed.corrections_json(stem, fin["method"], ops,
                                                 {"pixel_nm": R["pixel_nm"]}).encode("utf-8"),
     }
@@ -133,7 +134,7 @@ def export_one(out_dir, stem, R, fin, ops):
 def summary_row(stem, R, fin):
     st = grain_stats(fin["grains"], R["pixel_nm"])
     return {
-        "снимок": stem, "метод": fin["method"],
+        "снимок": stem, "метод": METHOD_SHORT[fin["method"]],
         "нм/пикс": round(R["pixel_nm"], 3) if R["pixel_nm"] else "",
         "зёрен": st["n"],
         "пор": int(measure.label(fin["cm"] == ed.CLS_ID["void"]).max()),

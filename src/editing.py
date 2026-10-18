@@ -172,6 +172,62 @@ def png_bytes(arr):
     buf = io.BytesIO(); Image.fromarray(arr).save(buf, format="PNG"); return buf.getvalue()
 
 
+# Русские названия столбцов таблицы зёрен (внутри программы ключи остаются английскими).
+# Столбцы в нм показываются только при известном масштабе.
+GRAIN_COLUMNS = [
+    ("id", "№ зерна", None),
+    ("class", "Класс", None),
+    ("cx_px", "Центр X, пикс.", None),
+    ("cy_px", "Центр Y, пикс.", None),
+    ("area_px", "Площадь, пикс.²", None),
+    ("area_nm2", "Площадь, нм²", "nm"),
+    ("perimeter_nm", "Периметр, нм", "nm"),
+    ("eq_diameter_nm", "Эквивалентный диаметр, нм", "nm"),
+    ("major_axis_nm", "Большая ось, нм", "nm"),
+    ("minor_axis_nm", "Малая ось, нм", "nm"),
+    ("feret_max_nm", "Макс. диаметр Фере, нм", "nm"),
+    ("feret_min_nm", "Мин. диаметр Фере, нм", "nm"),
+    ("eccentricity", "Эксцентриситет", None),
+    ("solidity", "Выпуклость", None),
+    ("circularity", "Округлость", None),
+    ("orientation_deg", "Ориентация, град.", None),
+    ("boundary_contrast", "Контраст границы", None),
+    ("boundary_uniformity_cv", "Неоднородность границы (КВ)", None),
+    ("touches_border", "Касается края", None),
+]
+CLASS_RU = {"grain": "зерно", "edge": "краевое зерно", "void": "пора / трещина",
+            "particle": "частица", "excluded": "исключено"}
+
+
+def _round(v):
+    if isinstance(v, (bool, np.bool_)):
+        return "да" if v else "нет"
+    if isinstance(v, (float, np.floating)):
+        if not np.isfinite(v):
+            return ""
+        a = abs(float(v))
+        return round(float(v), 1 if a >= 100 else 2 if a >= 1 else 3)
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    return v
+
+
+def grains_ru(rows, pixel_nm=None):
+    """Таблица зёрен с русскими заголовками и значениями (для показа и CSV)."""
+    out = []
+    for r in rows:
+        row = {}
+        for key, title, unit in GRAIN_COLUMNS:
+            if key not in r or (unit == "nm" and not pixel_nm):
+                continue
+            v = r[key]
+            if key == "class":
+                v = CLASS_RU.get(v, v)
+            row[title] = _round(v)
+        out.append(row)
+    return out
+
+
 def csv_bytes(rows):
     import csv
     if not rows:

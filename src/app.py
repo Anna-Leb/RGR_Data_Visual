@@ -31,10 +31,11 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = ROOT / "models" / "rf_boundary.joblib"
-METHOD_NAMES = {"A": "A — гребни (Sato) + водораздел",
-                "B": "B — яркость зерна + водораздел",
-                "C": "C — Random Forest (обучаемый)",
-                "E": "E — ансамбль (итоговый)"}
+METHOD_NAMES = {"A": "A — по границам (фильтр гребней + водораздел)",
+                "B": "B — по яркости зерна (+ водораздел)",
+                "C": "C — обучаемая модель",
+                "E": "E — общая модель (итоговая)"}
+METHOD_SHORT = {"A": "по границам", "B": "по яркости", "C": "обучаемая модель", "E": "общая модель"}
 IMG_TYPES = ["png", "tif", "tiff", "jpg", "jpeg", "bmp"]
 
 st.set_page_config(page_title="Сегментация зёрен SEM", layout="wide")
@@ -169,7 +170,7 @@ with tab_stages:
     b.image(R["pre"], caption="2. Предобработка", width=w, clamp=True)
     e = M["edge"] / (M["edge"].max() + 1e-9)
     c.image((plt.cm.magma(e)[..., :3] * 255).astype(np.uint8), width=w,
-            caption="3. Карта вероятностей (RF)" if meth == "C" else "3. Карта границ")
+            caption="3. Карта вероятностей границ" if meth == "C" else "3. Карта границ")
     a, b, c = st.columns(3)
     a.image(segmentation.mark_boundaries(img, M["labels"], color=(1, 0, 0)), width=w, clamp=True,
             caption=f"4. Первичная сегментация ({int(M['labels'].max())} объектов)")
